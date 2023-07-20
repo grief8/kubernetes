@@ -23,7 +23,6 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	kubeletconfig "k8s.io/kubernetes/pkg/kubelet/apis/config"
-	"k8s.io/kubernetes/pkg/kubelet/eviction"
 	"k8s.io/kubernetes/pkg/kubelet/lifecycle"
 	"k8s.io/kubernetes/pkg/kubelet/prober"
 	"k8s.io/utils/clock"
@@ -38,12 +37,11 @@ type Manager interface {
 
 // Config represents Manager configuration
 type Config struct {
-	Logger                           klog.Logger
-	ProbeManager                     prober.Manager
-	Recorder                         record.EventRecorder
-	NodeRef                          *v1.ObjectReference
-	GetPodsFunc                      eviction.ActivePodsFunc
-	KillPodFunc                      eviction.KillPodFunc
+	Logger       klog.Logger
+	ProbeManager prober.Manager
+	Recorder     record.EventRecorder
+	NodeRef      *v1.ObjectReference
+
 	SyncNodeStatusFunc               func()
 	ShutdownGracePeriodRequested     time.Duration
 	ShutdownGracePeriodCriticalPods  time.Duration

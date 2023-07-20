@@ -305,6 +305,8 @@ func (m *qosContainerManagerImpl) setMemoryQoS(configs map[v1.PodQOSClass]*Cgrou
 	}
 }
 
+// TODO: in delegated kubelet, cgroupfs/systemd do not have all cgroups, they only have cgroups belonging to the
+// specific user, so to correctly allocate resources for QoS cgroups, we should substract the usage of other users.
 func (m *qosContainerManagerImpl) UpdateCgroups() error {
 	m.Lock()
 	defer m.Unlock()

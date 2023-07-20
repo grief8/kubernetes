@@ -124,8 +124,6 @@ func NewManager(conf *Config) (Manager, lifecycle.PodAdmitHandler) {
 		probeManager:                     conf.ProbeManager,
 		recorder:                         conf.Recorder,
 		nodeRef:                          conf.NodeRef,
-		getPods:                          conf.GetPodsFunc,
-		killPodFunc:                      conf.KillPodFunc,
 		syncNodeStatus:                   conf.SyncNodeStatusFunc,
 		shutdownGracePeriodByPodPriority: shutdownGracePeriodByPodPriority,
 		clock:                            conf.Clock,

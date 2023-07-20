@@ -304,25 +304,12 @@ func TestManager(t *testing.T) {
 		t.Run(tc.desc, func(t *testing.T) {
 			logger, _ := ktesting.NewTestContext(t)
 
-			activePodsFunc := func() []*v1.Pod {
-				return tc.activePods
-			}
-
 			type PodKillInfo struct {
 				Name        string
 				GracePeriod int64
 			}
 
 			podKillChan := make(chan PodKillInfo, 1)
-			killPodsFunc := func(pod *v1.Pod, evict bool, gracePeriodOverride *int64, fn func(podStatus *v1.PodStatus)) error {
-				var gracePeriod int64
-				if gracePeriodOverride != nil {
-					gracePeriod = *gracePeriodOverride
-				}
-				fn(&pod.Status)
-				podKillChan <- PodKillInfo{Name: pod.Name, GracePeriod: gracePeriod}
-				return nil
-			}
 
 			fakeShutdownChan := make(chan bool)
 			fakeDbus := &fakeDbus{currentInhibitDelay: tc.systemInhibitDelay, shutdownChan: fakeShutdownChan, overrideSystemInhibitDelay: tc.overrideSystemInhibitDelay}
@@ -342,8 +329,6 @@ func TestManager(t *testing.T) {
 				ProbeManager:                    proberManager,
 				Recorder:                        fakeRecorder,
 				NodeRef:                         nodeRef,
-				GetPodsFunc:                     activePodsFunc,
-				KillPodFunc:                     killPodsFunc,
 				SyncNodeStatusFunc:              func() {},
 				ShutdownGracePeriodRequested:    tc.shutdownGracePeriodRequested,
 				ShutdownGracePeriodCriticalPods: tc.shutdownGracePeriodCriticalPods,
@@ -430,12 +415,6 @@ func TestFeatureEnabled(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.desc, func(t *testing.T) {
 			logger, _ := ktesting.NewTestContext(t)
-			activePodsFunc := func() []*v1.Pod {
-				return nil
-			}
-			killPodsFunc := func(pod *v1.Pod, evict bool, gracePeriodOverride *int64, fn func(*v1.PodStatus)) error {
-				return nil
-			}
 			defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, pkgfeatures.GracefulNodeShutdown, tc.featureGateEnabled)()
 
 			proberManager := probetest.FakeManager{}
@@ -447,8 +426,6 @@ func TestFeatureEnabled(t *testing.T) {
 				ProbeManager:                    proberManager,
 				Recorder:                        fakeRecorder,
 				NodeRef:                         nodeRef,
-				GetPodsFunc:                     activePodsFunc,
-				KillPodFunc:                     killPodsFunc,
 				SyncNodeStatusFunc:              func() {},
 				ShutdownGracePeriodRequested:    tc.shutdownGracePeriodRequested,
 				ShutdownGracePeriodCriticalPods: 0,
@@ -470,12 +447,6 @@ func TestRestart(t *testing.T) {
 	shutdownGracePeriodCriticalPods := 10 * time.Second
 	systemInhibitDelay := 40 * time.Second
 	overrideSystemInhibitDelay := 40 * time.Second
-	activePodsFunc := func() []*v1.Pod {
-		return nil
-	}
-	killPodsFunc := func(pod *v1.Pod, isEvicted bool, gracePeriodOverride *int64, fn func(*v1.PodStatus)) error {
-		return nil
-	}
 	syncNodeStatus := func() {}
 
 	var shutdownChan chan bool
@@ -503,8 +474,6 @@ func TestRestart(t *testing.T) {
 		ProbeManager:                    proberManager,
 		Recorder:                        fakeRecorder,
 		NodeRef:                         nodeRef,
-		GetPodsFunc:                     activePodsFunc,
-		KillPodFunc:                     killPodsFunc,
 		SyncNodeStatusFunc:              syncNodeStatus,
 		ShutdownGracePeriodRequested:    shutdownGracePeriodRequested,
 		ShutdownGracePeriodCriticalPods: shutdownGracePeriodCriticalPods,

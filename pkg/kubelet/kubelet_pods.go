@@ -468,10 +468,29 @@ func (kl *Kubelet) GetPodCgroupParent(pod *v1.Pod) string {
 // GenerateRunContainerOptions generates the RunContainerOptions, which can be used by
 // the container runtime to set parameters for launching a container.
 func (kl *Kubelet) GenerateRunContainerOptions(ctx context.Context, pod *v1.Pod, container *v1.Container, podIP string, podIPs []string) (*kubecontainer.RunContainerOptions, func(), error) {
+	// load config from host
+	// loadedConfig := kl.delegationManager.GetContainerConfig(pod.UID, container.Name)
+
 	opts, err := kl.containerManager.GetResources(pod, container)
 	if err != nil {
 		return nil, nil, err
 	}
+
+	// ensure the host does not inject hardful info by only importing the corresponding info.
+	// for some device plugins, some values below are fixed.
+	// for dev := range opts.Devices {
+
+	// }
+	// for mount := range opts.Mounts {
+
+	// }
+	// for env := range opts.Envs {
+
+	// }
+	// for annotation := range opts.Annotations {
+
+	// }
+
 	// The value of hostname is the short host name and it is sent to makeMounts to create /etc/hosts file.
 	hostname, hostDomainName, err := kl.GeneratePodHostNameAndDomain(pod)
 	if err != nil {

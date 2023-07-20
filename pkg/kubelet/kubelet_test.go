@@ -66,7 +66,6 @@ import (
 	containertest "k8s.io/kubernetes/pkg/kubelet/container/testing"
 	"k8s.io/kubernetes/pkg/kubelet/cri/remote"
 	fakeremote "k8s.io/kubernetes/pkg/kubelet/cri/remote/fake"
-	"k8s.io/kubernetes/pkg/kubelet/eviction"
 	"k8s.io/kubernetes/pkg/kubelet/images"
 	"k8s.io/kubernetes/pkg/kubelet/lifecycle"
 	"k8s.io/kubernetes/pkg/kubelet/logs"
@@ -337,12 +336,6 @@ func newTestKubeletWithImageList(
 		UID:       types.UID(kubelet.nodeName),
 		Namespace: "",
 	}
-	// setup eviction manager
-	evictionManager, evictionAdmitHandler := eviction.NewManager(kubelet.resourceAnalyzer, eviction.Config{},
-		killPodNow(kubelet.podWorkers, fakeRecorder), kubelet.imageManager, kubelet.containerGC, fakeRecorder, nodeRef, kubelet.clock, kubelet.supportLocalStorageCapacityIsolation())
-
-	kubelet.evictionManager = evictionManager
-	kubelet.admitHandlers.AddPodAdmitHandler(evictionAdmitHandler)
 
 	// setup shutdown manager
 	shutdownManager, shutdownAdmitHandler := nodeshutdown.NewManager(&nodeshutdown.Config{
@@ -350,8 +343,6 @@ func newTestKubeletWithImageList(
 		ProbeManager:                    kubelet.probeManager,
 		Recorder:                        fakeRecorder,
 		NodeRef:                         nodeRef,
-		GetPodsFunc:                     kubelet.podManager.GetPods,
-		KillPodFunc:                     killPodNow(kubelet.podWorkers, fakeRecorder),
 		SyncNodeStatusFunc:              func() {},
 		ShutdownGracePeriodRequested:    0,
 		ShutdownGracePeriodCriticalPods: 0,

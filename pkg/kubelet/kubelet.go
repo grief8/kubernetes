@@ -80,6 +80,7 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/configmap"
 	kubecontainer "k8s.io/kubernetes/pkg/kubelet/container"
 	"k8s.io/kubernetes/pkg/kubelet/cri/remote"
+	"k8s.io/kubernetes/pkg/kubelet/delegation"
 	"k8s.io/kubernetes/pkg/kubelet/events"
 	"k8s.io/kubernetes/pkg/kubelet/eviction"
 	"k8s.io/kubernetes/pkg/kubelet/images"
@@ -95,7 +96,6 @@ import (
 	"k8s.io/kubernetes/pkg/kubelet/pluginmanager"
 	plugincache "k8s.io/kubernetes/pkg/kubelet/pluginmanager/cache"
 	kubepod "k8s.io/kubernetes/pkg/kubelet/pod"
-	"k8s.io/kubernetes/pkg/kubelet/preemption"
 	"k8s.io/kubernetes/pkg/kubelet/prober"
 	proberesults "k8s.io/kubernetes/pkg/kubelet/prober/results"
 	"k8s.io/kubernetes/pkg/kubelet/runtimeclass"
@@ -207,6 +207,8 @@ var (
 	// ContainerLogsDir can be overwrited for testing usage
 	ContainerLogsDir = DefaultContainerLogsDir
 	etcHostsPath     = getContainerEtcHostsPath()
+	// TODO: temporarily we fix the user name. Later we should adapt it to multi-tenancy setting
+	userName = "user"
 )
 
 func getContainerEtcHostsPath() string {
@@ -435,23 +437,6 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 		LowThresholdPercent:  int(kubeCfg.ImageGCLowThresholdPercent),
 	}
 
-	enforceNodeAllocatable := kubeCfg.EnforceNodeAllocatable
-	if experimentalNodeAllocatableIgnoreEvictionThreshold {
-		// Do not provide kubeCfg.EnforceNodeAllocatable to eviction threshold parsing if we are not enforcing Evictions
-		enforceNodeAllocatable = []string{}
-	}
-	thresholds, err := eviction.ParseThresholdConfig(enforceNodeAllocatable, kubeCfg.EvictionHard, kubeCfg.EvictionSoft, kubeCfg.EvictionSoftGracePeriod, kubeCfg.EvictionMinimumReclaim)
-	if err != nil {
-		return nil, err
-	}
-	evictionConfig := eviction.Config{
-		PressureTransitionPeriod: kubeCfg.EvictionPressureTransitionPeriod.Duration,
-		MaxPodGracePeriodSeconds: int64(kubeCfg.EvictionMaxPodGracePeriod),
-		Thresholds:               thresholds,
-		KernelMemcgNotification:  kernelMemcgNotification,
-		PodCgroupRoot:            kubeDeps.ContainerManager.GetPodCgroupRoot(),
-	}
-
 	var serviceLister corelisters.ServiceLister
 	var serviceHasSynced cache.InformerSynced
 	if kubeDeps.KubeClient != nil {
@@ -615,6 +600,7 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 	klet.podManager = kubepod.NewBasicPodManager()
 
 	klet.statusManager = status.NewManager(klet.kubeClient, klet.podManager, klet, kubeDeps.PodStartupLatencyTracker, klet.getRootDir())
+	klet.delegationManager = delegation.NewManager(klet.clock, killPodNow(klet.podWorkers, kubeDeps.Recorder), klet.kubeClient, klet.podManager, klet.getRootDir(), userName, string(nodeName))
 
 	klet.resourceAnalyzer = serverstats.NewResourceAnalyzer(klet, kubeCfg.VolumeStatsAggPeriod.Duration, kubeDeps.Recorder)
 
@@ -834,13 +820,6 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 
 	klet.backOff = flowcontrol.NewBackOff(backOffPeriod, MaxContainerBackOff)
 
-	// setup eviction manager
-	evictionManager, evictionAdmitHandler := eviction.NewManager(klet.resourceAnalyzer, evictionConfig,
-		killPodNow(klet.podWorkers, kubeDeps.Recorder), klet.imageManager, klet.containerGC, kubeDeps.Recorder, nodeRef, klet.clock, kubeCfg.LocalStorageCapacityIsolation)
-
-	klet.evictionManager = evictionManager
-	klet.admitHandlers.AddPodAdmitHandler(evictionAdmitHandler)
-
 	// Safe, allowed sysctls can always be used as unsafe sysctls in the spec.
 	// Hence, we concatenate those two lists.
 	safeAndUnsafeSysctls := append(sysctl.SafeSysctlAllowlist(), allowedUnsafeSysctls...)
@@ -859,9 +838,6 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 	klet.AddPodSyncHandler(activeDeadlineHandler)
 
 	klet.admitHandlers.AddPodAdmitHandler(klet.containerManager.GetAllocateResourcesPodAdmitHandler())
-
-	criticalPodAdmissionHandler := preemption.NewCriticalPodAdmissionHandler(klet.GetActivePods, killPodNow(klet.podWorkers, kubeDeps.Recorder), kubeDeps.Recorder)
-	klet.admitHandlers.AddPodAdmitHandler(lifecycle.NewPredicateAdmitHandler(klet.getNodeAnyWay, criticalPodAdmissionHandler, klet.containerManager.UpdatePluginResources))
 	// apply functional Option's
 	for _, opt := range kubeDeps.Options {
 		opt(klet)
@@ -892,8 +868,6 @@ func NewMainKubelet(kubeCfg *kubeletconfiginternal.KubeletConfiguration,
 		ProbeManager:                     klet.probeManager,
 		Recorder:                         kubeDeps.Recorder,
 		NodeRef:                          nodeRef,
-		GetPodsFunc:                      klet.GetActivePods,
-		KillPodFunc:                      killPodNow(klet.podWorkers, kubeDeps.Recorder),
 		SyncNodeStatusFunc:               klet.syncNodeStatus,
 		ShutdownGracePeriodRequested:     kubeCfg.ShutdownGracePeriod.Duration,
 		ShutdownGracePeriodCriticalPods:  kubeCfg.ShutdownGracePeriodCriticalPods.Duration,
@@ -992,12 +966,6 @@ type Kubelet struct {
 	// must still run to completion.
 	podWorkers PodWorkers
 
-	// evictionManager observes the state of the node for situations that could impact node stability
-	// and evicts pods (sets to phase Failed with reason Evicted) to reduce resource pressure. The
-	// eviction manager acts on the actual state of the node and considers the podWorker to be
-	// authoritative.
-	evictionManager eviction.Manager
-
 	// probeManager tracks the set of running pods and ensures any user-defined periodic checks are
 	// run to introspect the state of each pod.  The probe manager acts on the actual state of the node
 	// and is notified of pods by the podWorker. The probe manager is the authoritative source of the
@@ -1030,6 +998,9 @@ type Kubelet struct {
 	// and components that need to check whether a pod is still running should instead directly
 	// consult the pod worker.
 	statusManager status.Manager
+
+	// delegationManager handles the interaction with CRI shim and API server.
+	delegationManager delegation.Manager
 
 	// resyncInterval is the interval between periodic full reconciliations of
 	// pods on this node.
@@ -1531,8 +1502,6 @@ func (kl *Kubelet) initializeRuntimeDependentModules() {
 		klog.ErrorS(err, "Failed to start ContainerManager")
 		os.Exit(1)
 	}
-	// eviction manager must start after cadvisor because it needs to know if the container runtime has a dedicated imagefs
-	kl.evictionManager.Start(kl.StatsProvider, kl.GetActivePods, kl.PodIsFinished, evictionMonitoringPeriod)
 
 	// container log manager must start after container runtime is up to retrieve information from container runtime
 	// and inform container to reopen log file after log rotation.
@@ -1638,6 +1607,8 @@ func (kl *Kubelet) Run(updates <-chan kubetypes.PodUpdate) {
 
 	// Start component sync loops.
 	kl.statusManager.Start()
+	// Start serving CRI requests from host kubelet
+	kl.delegationManager.Start(kl.PodIsFinished)
 
 	// Start syncing RuntimeClasses if enabled.
 	if kl.runtimeClassManager != nil {
@@ -1928,6 +1899,8 @@ func (kl *Kubelet) SyncPod(ctx context.Context, updateType kubetypes.SyncPodType
 		}
 		return false, err
 	}
+
+	// TODO: see how the volume is attached and mounted, volume manager may need heavy modification
 
 	// Fetch the pull secrets for the pod
 	pullSecrets := kl.getPullSecretsForPod(pod)
